@@ -1,1 +1,17 @@
-{"backfill": {"next_date": "2026-11-01", "empty_streak": 0, "done": false}, "partial": {}, "failed": {}}
+{
+ "backfill": {
+  "done": false,
+  "empty_streak": 0,
+  "next_date": "2026-11-01"
+ },
+ "failed": {
+  "2026-11-02": 1
+ },
+ "partial": {
+  "2026-11-02": {
+   "bytes": 5173822,
+   "pages": 1404,
+   "total": 70228
+  }
+ }
+}
