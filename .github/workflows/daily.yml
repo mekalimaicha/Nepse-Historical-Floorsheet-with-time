@@ -1,0 +1,38 @@
+name: Daily floorsheet (3:30 PM NPT on trading days)
+on:
+  schedule:
+    - cron: "45 9 * * *"          # 09:45 UTC = 15:30 NPT; script checks the trading calendar
+  workflow_dispatch:
+concurrency:
+  group: floorsheet-scrape
+  cancel-in-progress: false
+permissions:
+  contents: write
+jobs:
+  daily:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12", cache: pip }
+      - run: pip install -r requirements.txt && playwright install --with-deps chromium
+      - uses: actions/cache/restore@v4
+        with:
+          path: .partial
+          key: partial-${{ github.run_id }}
+          restore-keys: partial-
+      - run: python -m src.runner daily --max-minutes 325
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: .partial
+          key: partial-${{ github.run_id }}
+      - name: Commit data
+        if: always()
+        run: |
+          git config user.name "floorsheet-bot"; git config user.email "bot@users.noreply.github.com"
+          git add data state
+          git diff --cached --quiet || git commit -m "Daily floorsheet $(date -u +%F)"
+          git pull --rebase -X ours || true
+          git push
