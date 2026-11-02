@@ -129,11 +129,35 @@ class Scraper:
             raise ScrapeError("Could not find 'Showing X to Y of N transactions' text")
         return t
 
-    def _next(self, prev_first):
-        btn = self.page.locator(NEXT_SEL).first
-        if not btn.count():
-            return False
-        if btn.is_disabled() or btn.get_attribute("aria-disabled") == "true":
+    def _next_button(self, wait=20):
+        """Return an ENABLED Next button, waiting while the page loads/hydrates; None if none appears."""
+        end = _time.monotonic() + wait
+        while True:
+            btn = self.page.locator(NEXT_SEL).first
+            try:
+                if btn.count() and btn.is_enabled() and btn.get_attribute("aria-disabled") != "true":
+                    return btn
+            except Exception:
+                pass
+            if _time.monotonic() >= end:
+                return None
+            _time.sleep(0.5)
+
+    def _diag(self, why):
+        """Log what the pagination looks like and save a screenshot (probe_out/)."""
+        try:
+            els = self.page.locator(NEXT_SEL)
+            info = [(els.nth(i).inner_text()[:20], els.nth(i).is_enabled()) for i in range(min(els.count(), 5))]
+            log(f"DIAG {why}: Next-candidates={info}")
+            import pathlib
+            pathlib.Path("probe_out").mkdir(exist_ok=True)
+            self.page.screenshot(path="probe_out/next_failure.png", full_page=True)
+        except Exception as e:  # noqa
+            log(f"DIAG failed: {e}")
+
+    def _next(self, prev_first, wait=20):
+        btn = self._next_button(wait)
+        if btn is None:
             return False
         btn.click()
         self.page.wait_for_function(
@@ -171,8 +195,9 @@ class Scraper:
         page_no = 1
         while page_no <= pages_done:  # fast-forward on resume
             first = self.page.locator("table tbody tr td").first.inner_text().strip()
-            if not self._next(first):
-                raise ScrapeError("Could not fast-forward to resume page")
+            if not self._next(first, wait=30):
+                self._diag(f"fast-forward stuck at page {page_no}")
+                raise ScrapeError(f"Could not fast-forward to resume page (stuck at page {page_no})")
             page_no += 1
 
         f = open(part, "ab")
@@ -200,12 +225,14 @@ class Scraper:
                     break
                 first = raw[0][0]
                 if not self._next(first):
-                    break
+                    self._diag(f"no Next button after page {page_no}")
+                    raise ScrapeError(f"Next button unavailable after page {page_no} "
+                                      f"({already + len(out):,}/{total:,} rows) - progress kept, will resume")
                 page_no += 1
                 if PAGE_DELAY:
                     _time.sleep(PAGE_DELAY)
-        except Deadline:
-            state.save()
+        except (Deadline, ScrapeError):
+            state.save()          # keep progress so the next attempt resumes
             raise
         finally:
             f.close()
