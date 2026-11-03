@@ -23,8 +23,10 @@ def test_parse():
     assert parse_date_time("Nov 2, 2026 02:05 PM") == ("2026-11-02", "14:05:00")
     assert parse_total("Showing 1 to 50 of 2,203,267.00 transactions") == 2203267
     idx = dict(sno=0, datetime=1, contract=2, symbol=3, buyer=4, seller=5, qty=6, rate=7, amount=8)
-    r = to_output_row(["1", "2026-11-02\n11:00:01", "C1", "NABIL", "58", "45", "1,200", "500.50", "6,00,600"], idx)
-    assert r == ["1", "C1", "NABIL", "58", "45", "1200", "500.50", "600600", "2026-11-02", "11:00:01"]
+    r = to_output_row(["1", "2026-11-02\n11:00:01", "C1", "NABIL", "58", "45", "1,200", "Rs 500.50", "Rs 600.6K"], idx)
+    assert r == ["1", "C1", "NABIL", "58", "45", "1200", "500.50", "600600.00", "2026-11-02", "11:00:01"]
+    r = to_output_row(["2", "2026-11-02\n11:00:02", "C2", "X", "1", "2", "10", "Rs 670", "Rs 6.7K"], idx)
+    assert r[5:8] == ["10", "670", "6700.00"]
 
 
 def test_windows():
@@ -47,3 +49,11 @@ def test_finalize(tmp_path, monkeypatch):
     f = tmp_path / "data" / "2026" / "2026-11-02_Floorsheet.csv"
     assert ok and f.read_text().splitlines()[0] == "S.No,Contract No,Symbol,Buyer,Seller,Quantity,Rate (Rs),Amount (Rs),Date,Time"
     assert len(f.read_text().splitlines()) == 121
+
+
+def test_backfill_range():
+    from src.runner import pending_backfill
+    from src.storage import State
+    p = pending_backfill(State({}))
+    assert p[0] == date(2026, 11, 2) and p[-1] == date(2026, 8, 21)
+    assert len(p) == 52 and all(d.weekday() < 5 for d in p)
