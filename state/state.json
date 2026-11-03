@@ -1,17 +1,1 @@
-{
- "backfill": {
-  "done": false,
-  "empty_streak": 0,
-  "next_date": "2026-10-30"
- },
- "failed": {
-  "2026-10-30": 1
- },
- "partial": {
-  "2026-10-30": {
-   "bytes": 5103359,
-   "pages": 1380,
-   "total": 74054
-  }
- }
-}
+{"backfill": {"done": false}, "empty_dates": [], "failed": {}, "partial": {}}
