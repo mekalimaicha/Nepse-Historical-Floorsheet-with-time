@@ -1,12 +1,14 @@
-"""Entry point:  python -m src.runner backfill|daily [--max-minutes N]"""
+"""Entry point:
+   python -m src.runner backfill|daily [--max-minutes N] [--manual] [--retry-failed]
+--manual: ignore the 7 PM-7 AM window and stop after at most 60 minutes. Just run it again to continue."""
 import argparse
 import sys
 import time as _time
 from datetime import date, datetime, time, timedelta
 
-from .config import (BACKFILL_START, DAILY_START, EMPTY_DAYS_LIMIT, EXTRA_BACKFILL_DATES,
+from .config import (BACKFILL_END, BACKFILL_START, DAILY_EARLIEST, DAILY_START, MANUAL_MAX_MINUTES,
                      MAX_ATTEMPTS_PER_RUN, MAX_FAILED_RUNS, NPT, WINDOW_END, WINDOW_START)
-from .scraper import Deadline, ScrapeError, Scraper, log
+from .scraper import Deadline, Scraper, log
 from .storage import State, day_done
 from .trading_calendar import is_trading_day, next_trading_day
 
@@ -29,6 +31,19 @@ def backfill_deadline(now: datetime, max_minutes: int):
     return None
 
 
+def pending_backfill(st: State):
+    """Trading days from BACKFILL_START down to BACKFILL_END that still need scraping (newest first)."""
+    empties = set(st.data["empty_dates"])
+    out, d = [], BACKFILL_START
+    while d >= BACKFILL_END:
+        k = d.isoformat()
+        if (is_trading_day(d) and not day_done(d) and k not in empties
+                and st.data["failed"].get(k, 0) < MAX_FAILED_RUNS):
+            out.append(d)
+        d -= timedelta(1)
+    return out
+
+
 def process_day(sc: Scraper, st: State, d: date, deadline):
     """Returns 'saved' | 'empty' | 'deadline' | 'failed' | 'skipped'."""
     key = d.isoformat()
@@ -43,7 +58,7 @@ def process_day(sc: Scraper, st: State, d: date, deadline):
             st.save()
             return res
         except Deadline:
-            log(f"{d}: deadline reached, progress saved - will resume next run")
+            log(f"{d}: time limit reached, progress saved - run again to continue")
             return "deadline"
         except Exception as e:  # noqa
             log(f"{d}: attempt {attempt}/{MAX_ATTEMPTS_PER_RUN} failed: {e}")
@@ -52,81 +67,104 @@ def process_day(sc: Scraper, st: State, d: date, deadline):
     n = st.data["failed"].get(key, 0) + 1
     st.data["failed"][key] = n
     st.save()
-    return "skipped" if n >= MAX_FAILED_RUNS else "failed"
+    if n >= MAX_FAILED_RUNS:
+        log(f"{d}: FAILED in {n} runs - skipped. Use --retry-failed (Manual run option) to try again.")
+        return "skipped"
+    return "failed"
 
 
-def run_backfill(max_minutes):
+def run_backfill(max_minutes, manual=False, retry_failed=False):
     now = datetime.now(NPT)
-    deadline = backfill_deadline(now, max_minutes)
-    if deadline is None:
-        log("Outside the backfill window (trading day, 7 AM-7 PM) - nothing to do.")
-        return 0
     st = State.load()
-    bf = st.data["backfill"]
-    if bf.get("done"):
-        log("Backfill already finished.")
+    if retry_failed:
+        st.data["failed"] = {}
+        st.save()
+    if manual:
+        deadline = now + timedelta(minutes=min(max_minutes, MANUAL_MAX_MINUTES))
+    else:
+        deadline = backfill_deadline(now, max_minutes)
+        if deadline is None:
+            log("Outside the backfill window (trading day, 7 AM-7 PM) - nothing to do.")
+            return 0
+    pending = pending_backfill(st)
+    if not pending:
+        st.data["backfill"]["done"] = True
+        st.save()
+        log(f"BACKFILL FINISHED: {BACKFILL_START} back to {BACKFILL_END} is complete.")
         return 0
-    log(f"Backfill running until {deadline:%Y-%m-%d %H:%M} NPT")
+    log(f"Backfill: {len(pending)} trading days left ({pending[0]} -> {pending[-1]}); "
+        f"running until {deadline:%Y-%m-%d %H:%M} NPT")
+    consecutive_fail = 0
     with Scraper() as sc:
-        for d in EXTRA_BACKFILL_DATES:
-            if is_trading_day(d) and not day_done(d):
-                if process_day(sc, st, d, deadline) in ("deadline", "failed"):
-                    return 0 if datetime.now(NPT) >= deadline else 1
-        d = date.fromisoformat(bf["next_date"])
-        streak = bf.get("empty_streak", 0)
-        while streak < EMPTY_DAYS_LIMIT:
+        for d in pending:
             if datetime.now(NPT) >= deadline:
                 break
-            if is_trading_day(d) and not day_done(d):
-                r = process_day(sc, st, d, deadline)
-                if r == "deadline":
-                    break
-                if r == "failed":
-                    return 1
-                streak = streak + 1 if r == "empty" else (0 if r == "saved" else streak)
-                if r == "empty":
-                    log(f"{d}: no data (empty streak {streak}/{EMPTY_DAYS_LIMIT})")
-            elif is_trading_day(d):
-                streak = 0  # already stored
-            d -= timedelta(1)
-            bf.update(next_date=d.isoformat(), empty_streak=streak)
-            st.save()
-        if streak >= EMPTY_DAYS_LIMIT:
-            bf["done"] = True
-            st.save()
-            log(f"BACKFILL FINISHED: {EMPTY_DAYS_LIMIT} consecutive trading days without data.")
+            r = process_day(sc, st, d, deadline)
+            if r == "deadline":
+                break
+            if r == "empty":
+                st.data["empty_dates"].append(d.isoformat())
+                st.save()
+                log(f"{d}: no data on the website (holiday?) - recorded")
+            consecutive_fail = consecutive_fail + 1 if r in ("failed", "skipped") else 0
+            if consecutive_fail >= 3:
+                log("3 days in a row failed - stopping this run (site layout changed or site down?)")
+                return 1
+    left = pending_backfill(st)
+    if not left:
+        st.data["backfill"]["done"] = True
+        st.save()
+        log("BACKFILL FINISHED.")
+    else:
+        log(f"{len(left)} trading days still to do - will continue in the next run.")
     return 0
 
 
-def run_daily(max_minutes):
+def run_daily(max_minutes, manual=False, retry_failed=False):
     now = datetime.now(NPT)
     today = now.date()
-    if today < DAILY_START or not is_trading_day(today):
-        log("Not a daily-scrape trading day.")
+    if today < DAILY_START:
+        log("Daily scraping starts on " + DAILY_START.isoformat())
         return 0
-    deadline = now + timedelta(minutes=max_minutes)
+    deadline = now + timedelta(minutes=min(max_minutes, MANUAL_MAX_MINUTES) if manual else max_minutes)
     st = State.load()
+    if retry_failed:
+        st.data["failed"] = {}
+    empties = set(st.data["empty_dates"])
     pending, d = [], DAILY_START
     while d <= today:                      # includes catch-up for any missed earlier day
-        if is_trading_day(d) and not day_done(d):
-            pending.append(d)
+        if is_trading_day(d) and not day_done(d) and d.isoformat() not in empties:
+            if d == today and now.time() < DAILY_EARLIEST:
+                log(f"{d}: market data not final before {DAILY_EARLIEST:%H:%M} NPT - skipping today for now.")
+            else:
+                pending.append(d)
         d += timedelta(1)
+    if not pending:
+        log("Nothing to scrape right now.")
+        return 0
     rc = 0
     with Scraper() as sc:
         for d in pending:
-            for tryno in range(6):         # data may not be published yet: wait 10 min and retry
+            tries = 0
+            while True:
                 r = process_day(sc, st, d, deadline)
-                if r == "saved" or r == "skipped":
+                if r in ("saved", "skipped"):
                     break
-                if r == "empty" and d != today:
-                    log(f"{d}: confirmed empty (holiday?)")
-                    break
-                if r == "deadline" or datetime.now(NPT) >= deadline:
+                if r == "deadline":
                     return 1
-                log(f"{d}: not ready ({r}); retry in 10 min")
+                if r == "failed":
+                    rc = 1
+                    break
+                tries += 1                 # r == 'empty'
+                if d != today or tries >= 3:
+                    st.data["empty_dates"].append(d.isoformat())
+                    st.save()
+                    log(f"{d}: no data on the website (holiday?) - recorded")
+                    break
+                if datetime.now(NPT) >= deadline:
+                    return 1
+                log(f"{d}: not published yet; retry in 10 min")
                 _time.sleep(600)
-            else:
-                rc = 1
     return rc
 
 
@@ -134,5 +172,8 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("mode", choices=["backfill", "daily"])
     ap.add_argument("--max-minutes", type=int, default=330)
+    ap.add_argument("--manual", action="store_true", help="ignore the time window; cap at 60 minutes")
+    ap.add_argument("--retry-failed", action="store_true")
     a = ap.parse_args()
-    sys.exit(run_backfill(a.max_minutes) if a.mode == "backfill" else run_daily(a.max_minutes))
+    fn = run_backfill if a.mode == "backfill" else run_daily
+    sys.exit(fn(a.max_minutes, a.manual, a.retry_failed))

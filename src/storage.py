@@ -17,6 +17,7 @@ class State:
         self.data.setdefault("backfill", {"next_date": "2026-11-01", "empty_streak": 0, "done": False})
         self.data.setdefault("partial", {})
         self.data.setdefault("failed", {})
+        self.data.setdefault("empty_dates", [])   # trading days confirmed to have no data (holidays)
 
     @classmethod
     def load(cls):

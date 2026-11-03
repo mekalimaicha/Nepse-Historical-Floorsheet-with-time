@@ -13,10 +13,12 @@ DATE_URL_TEMPLATE = os.getenv("DATE_URL_TEMPLATE", "")
 
 NPT = ZoneInfo("Asia/Kathmandu")
 
-BACKFILL_START = date(2026, 11, 1)          # go backwards from here
-EXTRA_BACKFILL_DATES = [date(2026, 11, 2)]  # gap between backfill start and daily start
-DAILY_START = date(2026, 11, 3)             # daily 3:30 PM job starts here
-EMPTY_DAYS_LIMIT = 30                       # stop after 30 consecutive trading days with no data
+BACKFILL_START = date(2026, 11, 2)          # newest day of the historical range (scraped first, going backwards)
+BACKFILL_END = date(2026, 8, 21)            # oldest day - the website has no data before this
+DAILY_START = date(2026, 11, 3)             # daily 3:30 PM job starts here (today)
+DAILY_EARLIEST = time(15, 30)               # never scrape "today" before this (market must be closed)
+MANUAL_MAX_MINUTES = 60                     # hard cap for a manually started run
+PARTIAL_FORMAT = 2                          # bump when the CSV row format changes (drops stale partial files)
 
 PAGE_SIZE = 50
 PAGE_DELAY = float(os.getenv("PAGE_DELAY", "0"))   # polite delay between pages (seconds)

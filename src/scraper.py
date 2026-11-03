@@ -7,7 +7,7 @@ from datetime import date, datetime
 from playwright.sync_api import TimeoutError as PWTimeout
 from playwright.sync_api import sync_playwright
 
-from .config import BASE_URL, DATE_URL_TEMPLATE, NPT, PAGE_DELAY, PAGE_SIZE
+from .config import BASE_URL, DATE_URL_TEMPLATE, NPT, PAGE_DELAY, PARTIAL_FORMAT, PAGE_SIZE
 from .parse import parse_total, to_output_row
 from .storage import State, finalize, partial_path
 
@@ -183,6 +183,9 @@ class Scraper:
         part = partial_path(d)
         meta = state.data["partial"].get(d.isoformat())
         pages_done, byte_ok = 0, 0
+        if meta and meta.get("fmt") != PARTIAL_FORMAT:
+            log(f"{d}: discarding old-format partial file (Amount format changed) - restarting day")
+            meta = None
         if meta and meta.get("total") == total and part.exists():
             pages_done, byte_ok = meta["pages"], meta["bytes"]
             with open(part, "r+b") as f:
@@ -216,7 +219,8 @@ class Scraper:
                 csv.writer(buf, lineterminator="\n").writerows(out)
                 f.write(buf.getvalue().encode())
                 f.flush()
-                state.data["partial"][d.isoformat()] = {"pages": page_no, "bytes": f.tell(), "total": total}
+                state.data["partial"][d.isoformat()] = {"pages": page_no, "bytes": f.tell(), "total": total,
+                                                         "fmt": PARTIAL_FORMAT}
                 if page_no % 25 == 0:
                     state.save()
                 if page_no % 200 == 0:
