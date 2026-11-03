@@ -3,7 +3,6 @@ on:
   schedule:
     # UTC = NPT - 5:45.  Starts at 07:00, 13:00, 19:00, 01:00 NPT; the script decides if it may run.
     - cron: "15 1,7,13,19 * * *"
-  workflow_dispatch:
 concurrency:
   group: floorsheet-scrape
   cancel-in-progress: false
