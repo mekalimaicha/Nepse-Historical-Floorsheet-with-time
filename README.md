@@ -7,7 +7,7 @@ data/2026/2026-11-02_Floorsheet.csv
 columns: S.No, Contract No, Symbol, Buyer, Seller, Quantity, Rate (Rs), Amount (Rs), Date, Time
 ```
 * Date / Time cell on the site is split into `Date` (YYYY-MM-DD) and `Time` (24-hour HH:MM:SS).
-* Numbers are saved without thousands separators.
+* Numbers are saved without thousands separators. The site shows Amount as `Rs 6.7K`, so **Amount (Rs) = Quantity x Rate**, written in full digits with 2 decimals (e.g. `6700.00`).
 * A day is saved **only if** the scraped row count equals the site's `Showing 1 to 50 of N transactions` figure.
   A mismatch is discarded and retried (never saved as a final file).
 * Files over 95 MB are split into `..._Floorsheet_part01.csv`, `_part02.csv` (GitHub rejects >100 MB).
@@ -15,12 +15,15 @@ columns: S.No, Contract No, Symbol, Buyer, Seller, Quantity, Rate (Rs), Amount (
 ## Schedules (Nepal time)
 | Workflow | When |
 |---|---|
-| `backfill.yml` | Trading days 7 PM -> 7 AM; non-trading days all day; repeats until finished |
-| `daily.yml` | 3:30 PM every trading day, from 2026-11-03 (also catches up missed days) |
+| `backfill.yml` | History **2026-08-21 -> 2026-11-02** (newest first). Trading days 7 PM -> 7 AM; non-trading days all day; repeats until every trading day in the range is saved |
+| `daily.yml` | 3:30 PM every trading day from 2026-11-03 (also catches up missed days; never scrapes today before 3:30 PM) |
+| `manual.yml` | **Actions -> Manual run -> Run workflow.** Any time, max 60 minutes, then stops with progress saved. Run it again to continue. Choose `backfill` or `daily`; tick *retry_failed* to retry failed days |
 
-Backfill goes from 2026-11-01 backwards (2026-11-02 is fetched first so there is no gap before the daily
-job starts) and finishes after **30 consecutive trading days with no data**. State: `state/state.json`.
-Trading days: `src/trading_calendar.py` (edit `SIX_DAY_END` once you know when the Sun-Fri period ended).
+Holidays (days with no data) are recorded in `state/state.json` (`empty_dates`) and not queried again.
+Trading days: `src/trading_calendar.py` (edit `SIX_DAY_END` only if you ever scrape 2022 data).
+
+## Checking data
+`python -m src.verify` checks every CSV (Amount = Quantity x Rate); `python -m src.verify --fix` repairs old files.
 
 ## Setup
 1. Create repo **Nepse-Historical-Floorsheet-with-time** (GitHub turns spaces into hyphens), push these files.
