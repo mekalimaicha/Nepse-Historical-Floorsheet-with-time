@@ -1,0 +1,63 @@
+name: Manual run (you choose the minutes - run again to continue)
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "backfill = 2026-08-21..2026-11-02 history; daily = today and missed days"
+        type: choice
+        options: [backfill, daily]
+        default: backfill
+      minutes:
+        description: "How many minutes this run may work (10-330). Progress is saved; run again to continue."
+        type: string
+        default: "120"
+      retry_failed:
+        description: "Retry days that failed in earlier runs"
+        type: boolean
+        default: false
+      verify_holidays:
+        description: "Also check the days your holiday list marks as closed (proves they really have no data)"
+        type: boolean
+        default: false
+concurrency:
+  group: floorsheet-scrape
+  cancel-in-progress: false
+permissions:
+  contents: write
+jobs:
+  manual:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12", cache: pip }
+      - run: pip install -r requirements.txt && playwright install --with-deps chromium
+      - uses: actions/cache/restore@v4
+        with:
+          path: .partial
+          key: partial-${{ github.run_id }}
+          restore-keys: partial-
+      - name: Scrape (stops after the chosen minutes; progress is saved)
+        env:
+          MINUTES: ${{ inputs.minutes }}
+        run: |
+          case "$MINUTES" in ''|*[!0-9]*) MINUTES=120 ;; esac
+          ARGS="--manual --max-minutes $MINUTES"
+          if [ "${{ inputs.retry_failed }}" = "true" ]; then ARGS="$ARGS --retry-failed"; fi
+          if [ "${{ inputs.verify_holidays }}" = "true" ]; then ARGS="$ARGS --verify-holidays"; fi
+          python -m src.runner ${{ inputs.mode }} $ARGS
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: .partial
+          key: partial-${{ github.run_id }}
+      - name: Commit data
+        if: always()
+        run: |
+          git config user.name "floorsheet-bot"; git config user.email "bot@users.noreply.github.com"
+          mkdir -p data state
+          git add data state
+          git diff --cached --quiet || git commit -m "Manual floorsheet run $(date -u +%F-%H%M)"
+          git pull --rebase -X ours || true
+          git push
